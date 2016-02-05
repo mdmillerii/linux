@@ -72,12 +72,31 @@ static int read_sr(struct spi_nor *nor)
 {
 	int ret;
 	u8 val;
+	static struct spi_nor *last_nor;
+	static u8 last_val;
+	static unsigned int last_rep;
 
 	ret = nor->read_reg(nor, SPINOR_OP_RDSR, &val, 1);
 	if (ret < 0) {
 		pr_err("error %d reading SR\n", (int) ret);
 		return ret;
 	}
+
+	last_rep++;
+	if (nor == last_nor && val == last_val)
+		return val;
+	if (last_rep > 1)
+	dev_dbg(last_nor->dev, "SR %02x repeated %u times", last_val, last_rep);
+
+	dev_dbg(nor->dev, "SR %02x (Write %sable %s%s %s%s%s%s%s)\n",
+		val, val & BIT(7) ? "en" : "dis", val & BIT(6) ? "BP3 " : "",
+		val & BIT(5) ? "Top" : "Bottom", val & BIT(4) ? " BP2" : "",
+		val & BIT(3) ? " BP1" : "", val & BIT(2) ? " BP0" : "",
+		val & BIT(1) ? " WREN" : "", val & BIT(0) ? " WRinP" : "");
+
+	last_nor = nor;
+	last_val = val;
+	last_rep = 0;
 
 	return val;
 }
@@ -91,12 +110,34 @@ static int read_fsr(struct spi_nor *nor)
 {
 	int ret;
 	u8 val;
+	static struct spi_nor *last_nor;
+	static u8 last_val;
+	static unsigned int last_rep;
 
 	ret = nor->read_reg(nor, SPINOR_OP_RDFSR, &val, 1);
 	if (ret < 0) {
 		pr_err("error %d reading FSR\n", ret);
 		return ret;
 	}
+
+
+	last_rep++;
+	if (nor == last_nor && val == last_val)
+		return val;
+	if (last_rep > 1)
+	dev_dbg(last_nor->dev, "FSR %02x repeated %u times", last_val, last_rep);
+
+	dev_dbg(nor->dev, "FSR %02x (%s%s%s%s%s%s%s %d-byte addressing)\n",
+		  val, val & BIT(7) ? "Busy" : "Ready",
+		  val & BIT(6) ? " Suspend" : "",
+		  val & BIT(5) ? " Erase-Fail " : "",
+		  val & BIT(4) ? " Program-Fail " : "",
+		  val & BIT(3) ? " Vpp" : "", val & BIT(2) ? " Suspend" : "",
+		  val & BIT(1) ? " Protection " : "", val & BIT(0) ? 3 : 4);
+
+	last_nor = nor;
+	last_val = val;
+	last_rep = 0;
 
 	return val;
 }
@@ -323,6 +364,7 @@ static int spi_nor_erase(struct mtd_info *mtd, struct erase_info *instr)
 	if (len == mtd->size) {
 		write_enable(nor);
 
+		dev_dbg(nor->dev, "erase_chip");
 		if (erase_chip(nor)) {
 			ret = -EIO;
 			goto erase_err;
@@ -342,6 +384,7 @@ static int spi_nor_erase(struct mtd_info *mtd, struct erase_info *instr)
 		while (len) {
 			write_enable(nor);
 
+			dev_dbg(nor->dev, "erase %08x", addr);
 			if (nor->erase(nor, addr)) {
 				ret = -EIO;
 				goto erase_err;
@@ -366,6 +409,7 @@ static int spi_nor_erase(struct mtd_info *mtd, struct erase_info *instr)
 	return ret;
 
 erase_err:
+	dev_dbg(nor->dev, "erase error: %d\n", ret);
 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_ERASE);
 	instr->state = MTD_ERASE_FAILED;
 	return ret;
@@ -589,7 +633,7 @@ static const struct flash_info spi_nor_ids[] = {
 	{ "n25q064a",    INFO(0x20bb17, 0, 64 * 1024,  128, SECT_4K | SPI_NOR_QUAD_READ) },
 	{ "n25q128a11",  INFO(0x20bb18, 0, 64 * 1024,  256, SPI_NOR_QUAD_READ) },
 	{ "n25q128a13",  INFO(0x20ba18, 0, 64 * 1024,  256, SPI_NOR_QUAD_READ) },
-	{ "n25q256a",    INFO(0x20ba19, 0, 64 * 1024,  512, SECT_4K | SPI_NOR_QUAD_READ) },
+	{ "n25q256a",    INFO(0x20ba19, 0, 64 * 1024,  512, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
 	{ "n25q512a",    INFO(0x20bb20, 0, 64 * 1024, 1024, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
 	{ "n25q512ax3",  INFO(0x20ba20, 0, 64 * 1024, 1024, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
 	{ "n25q00",      INFO(0x20ba21, 0, 64 * 1024, 2048, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
@@ -833,10 +877,13 @@ static int spi_nor_write(struct mtd_info *mtd, loff_t to, size_t len,
 
 	/* do all the bytes fit onto one page? */
 	if (page_offset + len <= nor->page_size) {
+		dev_dbg(nor->dev, "write %u at %08x (full)\n", len, (u32)to);
 		nor->write(nor, to, len, retlen, buf);
 	} else {
 		/* the size of data remaining on the first page */
 		page_size = nor->page_size - page_offset;
+		dev_dbg(nor->dev, "write %u at %08x (first of %u)\n",
+			page_size, (u32)to, len);
 		nor->write(nor, to, page_size, retlen, buf);
 
 		/* write everything in nor->page_size chunks */
@@ -851,6 +898,8 @@ static int spi_nor_write(struct mtd_info *mtd, loff_t to, size_t len,
 
 			write_enable(nor);
 
+			dev_dbg(nor->dev, "write %u at %08x (%u remaining)\n",
+				page_size, (u32)to + i, len - i);
 			nor->write(nor, to + i, page_size, retlen, buf + i);
 		}
 	}

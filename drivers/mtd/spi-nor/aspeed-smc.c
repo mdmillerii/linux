@@ -131,6 +131,38 @@ static u32 spi_control_fill_opcode(u8 opcode)
 	return ((u32)(opcode)) << CONTROL_SPI_COMMAND_SHIFT;
 }
 
+#if 0 /* ATTR */
+static u32 spi_control_to_freq_div(u32 control)
+{
+	u32 sel;
+
+	sel = control & CONTROL_SPI_CLOCK_FREQ_SEL_MASK;
+	sel >>= CONTROL_SPI_CLOCK_FREQ_SEL_SHIFT;
+
+	/* 16, 14, 12, 10, 8, 6, 4, 2, 15, 13, 11, 9, 7, 5, 3, 1 */
+	return 16 - (((sel & 7) << 1) + ((sel & 8) >> 1));
+}
+
+static u32 spi_control_to_dummy_bytes(u32 control)
+{
+
+	return ((control & CONTROL_SPI_IO_DUMMY_CYCLES_LO) >>
+			CONTROL_SPI_IO_DUMMY_CYCLES_LO_SHIFT) |
+		((control & CONTROL_SPI_IO_DUMMY_CYCLES_HI_SHIFT) >>
+			CONTROL_SPI_IO_DUMMY_CYCLES_HI_SHIFT);
+}
+
+static size_t show_ctl_div(u32 control, char *buf)
+{
+	return sprintf(buf, "%u\n", spi_control_to_freq_div(control));
+}
+
+static size_t show_ctl_dummy_bytes(u32 control, char *buf)
+{
+	return sprintf(buf, "%u\n", spi_control_to_dummy_bytes(control));
+}
+#endif /* ATTR */
+
 static void aspeed_smc_start_user(struct spi_nor *nor)
 {
 	struct aspeed_smc_chip *chip = nor->priv;
@@ -159,6 +191,25 @@ static void aspeed_smc_stop_user(struct spi_nor *nor)
 
 	mutex_unlock(&chip->controller->mutex);
 }
+
+#if 0 /* memcpy */
+static void aspeed_smc_start_write(struct spi_nor *nor)
+{
+	struct aspeed_smc_chip *chip = nor->priv;
+	u32 ctl = chip->ctl_val[smc_write];
+
+	mutex_lock(&chip->controller->mutex);
+
+	writel(ctl | CONTROL_SPI_CE_STOP_ACTIVE_CONTROL,  chip->ctl);
+
+	writel(ctl, chip->ctl);
+}
+
+static void aspeed_smc_stop_write(struct spi_nor *nor)
+{
+	aspeed_smc_stop_user(nor);
+}
+#endif
 
 static int aspeed_smc_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf, int len)
 {
@@ -211,6 +262,34 @@ static void aspeed_smc_send_cmd_addr(struct spi_nor *nor, u8 cmd, u32 addr)
 		break;
 	}
 }
+
+#if 0 /* memcpy */
+static int aspeed_smc_read_memcpy(struct spi_nor *nor, loff_t from, size_t len,
+				  size_t *retlen, u_char *read_buf)
+{
+	struct aspeed_smc_chip *chip = nor->priv;
+
+	mutex_lock(&chip->controller->mutex);
+
+	memcpy_fromio(read_buf, chip->base, len);
+	*retlen += len;
+
+	mutex_unlock(&chip->controller->mutex);
+
+	return 0;
+}
+
+static void aspeed_smc_write_memcpy(struct spi_nor *nor, loff_t to, size_t len,
+				    size_t *retlen, const u_char *write_buf)
+{
+	struct aspeed_smc_chip *chip = nor->priv;
+
+	aspeed_smc_start_write(nor);
+	memcpy_toio(chip->base, write_buf, len);
+	*retlen += len;
+	aspeed_smc_stop_write(nor);
+}
+#endif
 
 static int aspeed_smc_read_user(struct spi_nor *nor, loff_t from, size_t len,
 				size_t *retlen, u_char *read_buf)
@@ -397,6 +476,11 @@ static int aspeed_smc_probe(struct platform_device *dev)
 		if ((reg & CONTROL_SPI_COMMAND_MODE_MASK) ==
 		    CONTROL_SPI_COMMAND_MODE_NORMAL)
 			chip->ctl_val[smc_read] = reg;
+#if 0 /* should we inherit fast read (fread) from boot ?  or id tables?*/
+		else if ((reg & CONTROL_SPI_COMMAND_MODE_MASK) ==
+			 CONTROL_SPI_COMMAND_MODE_FREAD)
+			chip->ctl_val[smc_read] = reg;
+#endif
 		else
 			chip->ctl_val[smc_read] = chip->ctl_val[smc_base] |
 				CONTROL_SPI_COMMAND_MODE_NORMAL;
