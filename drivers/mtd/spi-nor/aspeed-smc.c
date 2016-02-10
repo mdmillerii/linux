@@ -22,39 +22,41 @@
 
 #include <asm/unaligned.h>
 
-static void *ins_align(const void __iomem *io, void *buf, size_t len)
+static void *ins_align(unsigned long io, void *buf, size_t len)
 {
 	BUILD_BUG_ON(0 & len & ~3);
 
 	if (len & 2) {
-		put_unaligned(inw((__force unsigned long)io), (u16 *)buf);
+		put_unaligned(inw(io), (u16 *)buf);
 		buf += sizeof(u16);
 	}
 	if (len & 1) {
-		put_unaligned(inb((__force unsigned long)io), (u8 *)buf);
+		put_unaligned(inb(io), (u8 *)buf);
 		buf += sizeof(u8);
 	}
 	return buf;
 }
 
-static const void *outs_align(void __iomem *io, const void *buf, size_t len)
+static const void *outs_align(unsigned long io, const void *buf, size_t len)
 {
 	BUILD_BUG_ON(0 & len & ~3);
 	if (len & 2) {
-		outw(get_unaligned((u16 *)buf), (__force unsigned long)io);
+		outw(get_unaligned((u16 *)buf), io);
 		buf += sizeof(u16);
 	}
 	if (len & 1) {
-		outb(get_unaligned((u8 *)buf), (__force unsigned long)io);
+		outb(get_unaligned((u8 *)buf), io);
 		buf += sizeof(u8);
 	}
 	return buf;
 }
 
-static void aspeed_smc_from_fifo(void *buf, const void __iomem *io, size_t len)
+static void aspeed_smc_from_fifo(void *buf, const void __iomem *iop, size_t len)
 {
-	if ((unsigned long)io & 1) {
-		insb((__force unsigned long)io, buf, len);
+	unsigned long io = (__force unsigned long)iop;
+
+	if (io & 1) {
+		insb(io, buf, len);
 	} else if ((unsigned long)io & 2) {
 		size_t l = (2 - (unsigned long)buf) & 1;
 
@@ -63,7 +65,7 @@ static void aspeed_smc_from_fifo(void *buf, const void __iomem *io, size_t len)
 		len -= l;
 
 		if (len >= 2) {
-			insw((__force unsigned long)io, buf, len >> 1);
+			insw(io, buf, len >> 1);
 			buf += len & ~1;
 		}
 		buf = ins_align(io, buf, len & 1);
@@ -75,18 +77,20 @@ static void aspeed_smc_from_fifo(void *buf, const void __iomem *io, size_t len)
 		len -= l;
 
 		if (len >= 4) {
-			insl((__force unsigned long)io, buf, len >> 2);
+			insl(io, buf, len >> 2);
 			buf += len & ~3;
 		}
 		buf = ins_align(io, buf, len & 3);
 	}
 }
 
-static void aspeed_smc_to_fifo(void __iomem *io, const void *buf, size_t len)
+static void aspeed_smc_to_fifo(void __iomem *iop, const void *buf, size_t len)
 {
-	if ((unsigned long)io & 1) {
+	unsigned long io = (__force unsigned long)iop;
+
+	if (io & 1) {
 		outsb((__force unsigned long)io, buf, len);
-	} else if ((unsigned long)io & 2) {
+	} else if (io & 2) {
 		size_t l = (2 - (unsigned long)buf) & 1;
 
 		len = min(l, len);
@@ -94,7 +98,7 @@ static void aspeed_smc_to_fifo(void __iomem *io, const void *buf, size_t len)
 		len -= l;
 
 		if (len >= 2) {
-			outsw((__force unsigned long)io, buf, len >> 1);
+			outsw(io, buf, len >> 1);
 			buf += len & ~(size_t)1;
 		}
 		buf = outs_align(io, buf, len & 1);
@@ -106,7 +110,7 @@ static void aspeed_smc_to_fifo(void __iomem *io, const void *buf, size_t len)
 		len -= l;
 
 		if (len >= 4) {
-			outsl((__force unsigned long)io, buf, len >> 2);
+			outsl(io, buf, len >> 2);
 			buf += len & ~(size_t)3;
 		}
 		buf = outs_align(io, buf, len & 3);
