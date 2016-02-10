@@ -775,7 +775,7 @@ static int spi_nor_read(struct mtd_info *mtd, loff_t from, size_t len,
 	struct spi_nor *nor = mtd_to_spi_nor(mtd);
 	int ret;
 
-	dev_dbg(nor->dev, "from 0x%08x, len %zd\n", (u32)from, len);
+	dev_dbg(nor->dev, "from 0x%08x, len %zd buf %p\n", (u32)from, len, buf);
 
 	ret = spi_nor_lock_and_prep(nor, SPI_NOR_OPS_READ);
 	if (ret)
@@ -794,7 +794,7 @@ static int sst_write(struct mtd_info *mtd, loff_t to, size_t len,
 	size_t actual;
 	int ret;
 
-	dev_dbg(nor->dev, "to 0x%08x, len %zd\n", (u32)to, len);
+	dev_dbg(nor->dev, "to 0x%08x, len %zd buf %p\n", (u32)to, len, buf);
 
 	ret = spi_nor_lock_and_prep(nor, SPI_NOR_OPS_WRITE);
 	if (ret)
@@ -865,7 +865,7 @@ static int spi_nor_write(struct mtd_info *mtd, loff_t to, size_t len,
 	u32 page_offset, page_size, i;
 	int ret;
 
-	dev_dbg(nor->dev, "to 0x%08x, len %zd\n", (u32)to, len);
+	dev_dbg(nor->dev, "to 0x%08x, len %zd buf %p\n", (u32)to, len, buf);
 
 	ret = spi_nor_lock_and_prep(nor, SPI_NOR_OPS_WRITE);
 	if (ret)
