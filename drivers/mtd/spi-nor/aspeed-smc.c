@@ -8,6 +8,7 @@
  *
  */
 
+#include <linux/bug.h>
 #include <linux/device.h>
 #include <linux/io.h>
 #include <linux/module.h>
@@ -18,6 +19,162 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/sysfs.h>
+
+#include <asm/unaligned.h>
+
+static void *ins_align(const void __iomem *io, void *buf, size_t len)
+{
+	BUILD_BUG_ON(0 & len & ~3);
+
+	if (len & 2) {
+		put_unaligned(inw((__force unsigned long)io), (u16 *)buf);
+		buf += sizeof(u16);
+	}
+	if (len & 1) {
+		put_unaligned(inb((__force unsigned long)io), (u8 *)buf);
+		buf += sizeof(u8);
+	}
+	return buf;
+}
+
+static const void *outs_align(void __iomem *io, const void *buf, size_t len)
+{
+	BUILD_BUG_ON(0 & len & ~3);
+	if (len & 2) {
+		outw(get_unaligned((u16 *)buf), (__force unsigned long)io);
+		buf += sizeof(u16);
+	}
+	if (len & 1) {
+		outb(get_unaligned((u8 *)buf), (__force unsigned long)io);
+		buf += sizeof(u8);
+	}
+	return buf;
+}
+
+static void aspeed_smc_from_fifo(void *buf, const void __iomem *io, size_t len)
+{
+	if ((unsigned long)io & 1) {
+		insb((__force unsigned long)io, buf, len);
+	} else if ((unsigned long)io & 2) {
+		size_t l = (2 - (unsigned long)buf) & 1;
+
+		l = min(l, len);
+		buf = ins_align(io, buf, l);
+		len -= l;
+
+		if (len >= 2) {
+			insw((__force unsigned long)io, buf, len >> 1);
+			buf += len & ~1;
+		}
+		buf = ins_align(io, buf, l);
+	} else {
+		size_t l = (4 - (unsigned long)buf) & 3;
+
+		l = min(l, len);
+		buf = ins_align(io, buf, l);
+		len -= l;
+
+		if (len >= 4) {
+			insl((__force unsigned long)io, buf, len >> 2);
+			buf += len & ~3;
+		}
+		buf = ins_align(io, buf, l);
+	}
+}
+
+static void aspeed_smc_to_fifo(void __iomem *io, const void *buf, size_t len)
+{
+	if ((unsigned long)io & 1) {
+		outsb((__force unsigned long)io, buf, len);
+	} else if ((unsigned long)io & 2) {
+		size_t l = (2 - (unsigned long)buf) & 1;
+
+		len = min(l, len);
+		buf = outs_align(io, buf, l);
+		len -= l;
+
+		if (len >= 2) {
+			outsw((__force unsigned long)io, buf, len >> 1);
+			buf += len & ~(size_t)1;
+		}
+		buf = outs_align(io, buf, len & 1);
+	} else {
+		size_t l = (4 - (unsigned long)buf) & 3;
+
+		l = min(l, len);
+		buf = outs_align(io, buf, l);
+		len -= l;
+
+		if (len >= 4) {
+			outsl((__force unsigned long)io, buf, len >> 2);
+			buf += len & ~(size_t)3;
+		}
+		buf = outs_align(io, buf, len & 3);
+	}
+}
+
+#if 1 /* debug memcpy_fromio issue */
+/* MDM: The current suspect is that mmiocpy (and arm memcpy) stutters
+ * when reading and switching from word back to byte accesses.
+ * The code does byte word read / barrel shift / write until the count
+ * is < 4, using one of 4 copys based on destination alignment.
+ * There is optional code to cache line align too.  But all appear
+ * to goto common code to do upto 3 byte copies based on the remaining
+ * length , discarding the upto 3 bytes read.  That is very bad when
+ * reading from a fifo.  Hence the new from_fifo and to_fifo above,
+ * based on insl / outsl.  The mmiocpy is new to arm in 2015.  -- Feb 2016
+ */
+static bool fifo_from = true, fifo_to = true;
+module_param(fifo_from, bool, 0644);
+module_param(fifo_to, bool, 0644);
+
+static bool mmio_from, mmio_to;
+module_param(mmio_from, bool, 0644);
+module_param(mmio_to, bool, 0644);
+
+void my_memcpy_toio(void __iomem *d, const void *s, size_t l)
+{
+	extern void mmiocpy(void *d, const void *s, size_t l);
+	if (mmio_to)
+		mmiocpy((__force void *)d, s, l);
+	else
+		_memcpy_toio(d, s, l);
+}
+
+void my_memcpy_fromio(void *d, const void __iomem *s, size_t l)
+{
+	extern void mmiocpy(void *d, const void *s, size_t l);
+	if (mmio_from)
+		mmiocpy(d, (__force const void *)s, l);
+	else
+		_memcpy_fromio(d, s, l);
+}
+
+void my_memcpy_tofifo(void __iomem *d, const void *s, size_t l)
+{
+	if (fifo_to)
+		aspeed_smc_to_fifo(d, s, l);
+	else
+		my_memcpy_toio(d, s, l);
+}
+
+void my_memcpy_fromfifo(void *d, const void __iomem *s, size_t l)
+{
+	if (fifo_from)
+		aspeed_smc_from_fifo(d, s, l);
+	else
+		my_memcpy_fromio(d, s, l);
+}
+
+#undef memcpy_fromio
+#undef memcpy_toio
+
+#define memcpy_fromio my_memcpy_fromio
+#define memcpy_toio my_memcpy_toio
+
+#define aspeed_smc_to_fifo my_memcpy_tofifo
+#define aspeed_smc_from_fifo my_memcpy_fromfifo
+#endif /* debug mmio_fromio issue */
 
 enum smc_flash_type {
 	smc_type_nor = 0,	/* controller connected to nor flash */
@@ -216,8 +373,8 @@ static int aspeed_smc_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf, int len)
 	struct aspeed_smc_chip *chip = nor->priv;
 
 	aspeed_smc_start_user(nor);
-	writeb(opcode, chip->base);
-	_memcpy_fromio(buf, chip->base, len);
+	aspeed_smc_to_fifo(chip->base, &opcode, 1);
+	aspeed_smc_from_fifo(buf, chip->base, len);
 	aspeed_smc_stop_user(nor);
 
 	return 0;
@@ -229,8 +386,8 @@ static int aspeed_smc_write_reg(struct spi_nor *nor, u8 opcode, u8 *buf,
 	struct aspeed_smc_chip *chip = nor->priv;
 
 	aspeed_smc_start_user(nor);
-	writeb(opcode, chip->base);
-	_memcpy_toio(chip->base, buf, len);
+	aspeed_smc_to_fifo(chip->base, &opcode, 1);
+	aspeed_smc_to_fifo(chip->base, buf, len);
 	aspeed_smc_stop_user(nor);
 
 	return 0;
@@ -253,12 +410,12 @@ static void aspeed_smc_send_cmd_addr(struct spi_nor *nor, u8 cmd, u32 addr)
 		cmdaddr |= (u32)cmd << 24;
 
 		temp = cpu_to_be32(cmdaddr);
-		memcpy_toio(chip->base, &temp, 4);
+		aspeed_smc_to_fifo(chip->base, &temp, 4);
 		break;
 	case 4:
 		temp = cpu_to_be32(addr);
-		writeb(cmd, chip->base);
-		memcpy_toio(chip->base, &temp, 4);
+		aspeed_smc_to_fifo(chip->base, &cmd, 1);
+		aspeed_smc_to_fifo(chip->base, &temp, 4);
 		break;
 	}
 }
@@ -298,7 +455,7 @@ static int aspeed_smc_read_user(struct spi_nor *nor, loff_t from, size_t len,
 
 	aspeed_smc_start_user(nor);
 	aspeed_smc_send_cmd_addr(nor, nor->read_opcode, from);
-	memcpy_fromio(read_buf, chip->base, len);
+	aspeed_smc_from_fifo(read_buf, chip->base, len);
 	*retlen += len;
 	aspeed_smc_stop_user(nor);
 
@@ -312,7 +469,7 @@ static void aspeed_smc_write_user(struct spi_nor *nor, loff_t to, size_t len,
 
 	aspeed_smc_start_user(nor);
 	aspeed_smc_send_cmd_addr(nor, nor->program_opcode, to);
-	memcpy_toio(chip->base, write_buf, len);
+	aspeed_smc_to_fifo(chip->base, write_buf, len);
 	*retlen += len;
 	aspeed_smc_stop_user(nor);
 }
