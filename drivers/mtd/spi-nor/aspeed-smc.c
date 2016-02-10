@@ -66,7 +66,7 @@ static void aspeed_smc_from_fifo(void *buf, const void __iomem *io, size_t len)
 			insw((__force unsigned long)io, buf, len >> 1);
 			buf += len & ~1;
 		}
-		buf = ins_align(io, buf, l);
+		buf = ins_align(io, buf, len & 1);
 	} else {
 		size_t l = (4 - (unsigned long)buf) & 3;
 
@@ -78,7 +78,7 @@ static void aspeed_smc_from_fifo(void *buf, const void __iomem *io, size_t len)
 			insl((__force unsigned long)io, buf, len >> 2);
 			buf += len & ~3;
 		}
-		buf = ins_align(io, buf, l);
+		buf = ins_align(io, buf, len & 3);
 	}
 }
 
