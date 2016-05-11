@@ -532,6 +532,16 @@ static void cache_estimate(unsigned long gfporder, size_t buffer_size,
 	size_t mgmt_size;
 	size_t slab_size = PAGE_SIZE << gfporder;
 
+#if FORCED_DEBUG
+	/* If we are inserting red zones in cache line objects then reserve
+	 * a cache line at the beginning and end of the slab for the debug,
+	 * leaving the contained objects aligned.
+	 */
+	if ((flags & (SLAB_RED_ZONE | SLAB_STORE_USER)) &&
+		(align > sizeof(unsigned long long)))
+		slab_size -= 2 * align;
+#endif
+
 	/*
 	 * The slab management structure can be either off the slab or
 	 * on it. For the latter case, the memory allocated for a
@@ -2179,7 +2189,8 @@ __kmem_cache_create (struct kmem_cache *cachep, unsigned long flags)
 		else
 			size += BYTES_PER_WORD;
 	}
-#if FORCED_DEBUG && defined(CONFIG_DEBUG_PAGEALLOC)
+#if FORCED_DEBUG
+#if defined(CONFIG_DEBUG_PAGEALLOC)
 	/*
 	 * To activate debug pagealloc, off-slab management is necessary
 	 * requirement. In early phase of initialization, small sized slab
@@ -2193,6 +2204,26 @@ __kmem_cache_create (struct kmem_cache *cachep, unsigned long flags)
 		cachep->obj_offset += PAGE_SIZE - ALIGN(size, cachep->align);
 		size = PAGE_SIZE;
 	}
+#else
+	/*
+	 * If the request was for cache line object alignment it was forced
+	 * off at 3 above because that is greater than the alignment of an
+	 * unsigned long long.  However SLAB_RED_ZONE can be very useful at
+	 * times.  When under FORCED_DEBUG but not CONFIG_DEBUG_PAGEALLOC and
+	 * the object fits in a page with a cache line on either side then
+	 * turn the debug back on.  The space for objects and the slab area
+	 * alignment will be adjusted elsewhere.  The intermediate cache lines
+	 * will have the trailing two long longs from one object and the
+	 * remainder will be the object offset posion and the initial red zone.
+	 */
+	if (ralign == cache_line_size() && size < 4096 - 2 * ralign &&
+	    ralign >= 3 * sizeof(unsigned long long) &&
+	    (flags & (SLAB_RED_ZONE | SLAB_STORE_USER)) == 0) {
+		size += ralign;
+		cachep->obj_offset += ralign - 2 * sizeof(unsigned long long);
+		flags |= SLAB_RED_ZONE | SLAB_STORE_USER;
+	}
+#endif
 #endif
 #endif
 
@@ -2464,6 +2495,16 @@ static void *alloc_slabmgmt(struct kmem_cache *cachep,
 		freelist = addr + colour_off;
 		colour_off += cachep->freelist_size;
 	}
+#if FORCED_DEBUG
+	/* If we are doing redzoning and the object was cache line aligned,
+	 * the object offset will not be a multiple of the alignment, so
+	 * adjust colour_off to make the object aligned.  Two cache lines
+	 * were reserved when calculating the object count for this purpose.
+	 */
+	if ((cachep->flags & (SLAB_RED_ZONE | SLAB_STORE_USER)) &&
+		(cachep->align > cachep->obj_offset))
+		colour_off += cachep->align - cachep->obj_offset;
+#endif
 	page->active = 0;
 	page->s_mem = addr + colour_off;
 	return freelist;
