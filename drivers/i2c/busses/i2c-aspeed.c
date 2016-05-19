@@ -517,6 +517,9 @@ static void ast_i2c_master_xfer_done(struct ast_i2c_bus *bus)
 				dev_dbg(bus->dev, "got rx len: %d\n",
 						bus->msg->len -1);
 			}
+			if (WARN_ON_ONCE(bus->msg_pos >= bus->msg->len))
+			dev_dbg(bus->dev,"read would have exceeded msg len\n");
+			else
 			bus->msg->buf[bus->msg_pos] = data;
 		}
 		bus->msg_pos++;
