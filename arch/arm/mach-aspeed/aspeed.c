@@ -60,8 +60,13 @@ static struct pinctrl_map ast2500evb_mapping[] __initdata = {
 
 
 static struct pinctrl_map witherspoon_mapping[] __initdata = {
+	PIN_MAP_MUX_GROUP_DEFAULT("i2c-13", "1e6e2000.pinmux", NULL, "I2C14"),
+	PIN_MAP_MUX_GROUP_DEFAULT("i2c-12", "1e6e2000.pinmux", NULL, "I2C13"),
 	PIN_MAP_MUX_GROUP_DEFAULT("i2c-11", "1e6e2000.pinmux", NULL, "I2C12"),
-	PIN_MAP_MUX_GROUP_DEFAULT("i2c-8", "1e6e2000.pinmux", NULL, "I2C9"),
+	PIN_MAP_MUX_GROUP_DEFAULT("i2c-10", "1e6e2000.pinmux", NULL, "I2C11"),
+	PIN_MAP_MUX_GROUP_DEFAULT("i2c-9", "1e6e2000.pinmux", NULL, "I2C10"),
+	PIN_MAP_MUX_GROUP_DEFAULT("i2c-5", "1e6e2000.pinmux", NULL, "I2C6"),
+	PIN_MAP_MUX_GROUP_DEFAULT("i2c-4", "1e6e2000.pinmux", NULL, "I2C5"),
 	PIN_MAP_MUX_GROUP_DEFAULT("i2c-3", "1e6e2000.pinmux", NULL, "I2C4"),
 	PIN_MAP_MUX_GROUP_DEFAULT("i2c-2", "1e6e2000.pinmux", NULL, "I2C3"),
 };
