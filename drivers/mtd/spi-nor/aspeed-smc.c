@@ -8,11 +8,6 @@
  *
  */
 
-/* See comment by aspeed_smc_from_fifo */
-#ifdef CONFIG_ARM
-#define IO_SPACE_LIMIT (~0UL)
-#endif
-
 #include <linux/bug.h>
 #include <linux/device.h>
 #include <linux/io.h>
@@ -26,90 +21,109 @@
 #include <linux/sysfs.h>
 
 /*
+ * In user mode we need to write or read an exact number of bytes
+ * to or from an address block range.  The chip decode range is
+ * treated as a fifo of arbitratry 1, 2, or 4 byte width but each
+ * write has to be aligned to its size.  The addres withing the
+ * multiple 8kB range is ignored when formatting the bitstream
+ * to send to or recieve from the spi bus.
+ *
  * On the arm architecture, as of Linux version 4.3, memcpy_fromio
- * stutters discarding some of the bytes read if the destination is
- * unaligned, so we can't use it for reading from a fifo to a buffer
- * of unknown alignment.  Instead use the ins (l, w, b) family
- * to read from the fifo.   However, ARM tries to hide io port
- * accesses from drivers unless there is a PCMCIA or PCI device, so
- * we define the limit before all include files.  There is a
- * check in probe to make sure this will work, as long as the
- * architecture uses an identity iomap.
+ * and memcpy_toio on little endian targets uses the optimized memcpy
+ * routines that were designed for well behavied memory storage.  These
+ * routines have a stutter if the source and destination are not both
+ * word aligned, once with an access to the source when aligning the
+ * destination to a word boundary, and once on the destination when
+ * the final source bytes are not word aligned.
+ *
+ * When writing or reading the fifo this stutter discards data or sends
+ * too much data to the fifo and can not be used by this driver.
+ *
+ * While the low level io string routines in the insl family appears
+ * to do what we want the io macros make them essentially impossible
+ * to use on a memory mapped address instead of a token from an iomap
+ * of an io port.  Instead these routines use readl and friends on a
+ * constant io port and manually update the memory buffer pointer.
  */
 
 static void aspeed_smc_from_fifo(void *buf, const void __iomem *iop, size_t len)
 {
-	unsigned long io = (__force unsigned long)iop;
-
 	if (!len)
 		return;
 
-	/* Expect a 4 byte input port.  Otherwise just read bytes */
-	if (unlikely(io & 3)) {
-		insb(io, buf, len);
-		return;
+	/* Expect a 4 byte input port.  Otherwise just read bytes. */
+	if (unlikely((unsigned long)iop & 3)) {
+		while (len--) {
+			*(u8 *)buf = readb(iop);
+			buf++;
+		}
 	}
 
 	/* Align target to word: first byte then half word */
 	if ((unsigned long)buf & 1) {
-		*(u8 *)buf = inb(io);
+		*(u8 *)buf = readb(iop);
 		buf++;
 		len--;
 	}
 	if (((unsigned long)buf & 2) && (len >= 2)) {
-		*(u16 *)buf = inw(io);
+		*(u16 *)buf = readw(iop);
 		buf += 2;
 		len -= 2;
 	}
+
 	/* Transfer words, then remaining halfword and remaining byte */
-	if (len >= 4) {
-		insl(io, buf, len >> 2);
-		buf += len & ~3;
+	while (len >= 4) {
+		*(u32 *)buf = readl(iop);
+		buf += 4;
+		len -= 4;
 	}
 	if (len & 2) {
-		*(u16 *)buf = inw(io);
+		*(u16 *)buf = readw(iop);
 		buf += 2;
 	}
 	if (len & 1) {
-		*(u8 *)buf = inb(io);
+		*(u8 *)buf = readb(iop);
 	}
 }
 
 static void aspeed_smc_to_fifo(void __iomem *iop, const void *buf, size_t len)
 {
-	unsigned long io = (__force unsigned long)iop;
-
 	if (!len)
 		return;
 
-	/* Expect a 4 byte output port.  Otherwise just write bytes */
-	if (io & 3) {
-		outsb(io, buf, len);
+	/* Expect a 4 byte output port.  Otherwise just write bytes. */
+	if ((unsigned long)iop & 3) {
+		while (len--) {
+			writeb(*(u8 *)buf, iop);
+			buf++;
+		}
 		return;
 	}
 
 	/* Align target to word: first byte then half word */
 	if ((unsigned long)buf & 1) {
-		outb(*(u8 *)buf, io);
+		writeb(*(u8 *)buf, iop);
 		buf++;
 		len--;
 	}
 	if (((unsigned long)buf & 2) && (len >= 2)) {
-		outw(*(u16 *)buf, io);
+		writew(*(u16 *)buf, iop);
 		buf += 2;
 		len -= 2;
 	}
+
 	/* Transfer words, then remaining halfword and remaining byte */
-	if (len >= 4) {
-		outsl(io, buf, len >> 2);
-		buf += len & ~(size_t)3;
+	while (len >= 4) {
+		writel(*(u32 *)buf, iop);
+		buf += 4;
+		len -= 4;
 	}
 	if (len & 2) {
-		outw(*(u16 *)buf, io);
+		writew(*(u16 *)buf, iop);
 		buf += 2;
 	}
 	if (len & 1) {
-		outb(*(u8 *)buf, io);
+		writeb(*(u8 *)buf, iop);
 	}
 }
 
@@ -376,14 +390,6 @@ static int aspeed_smc_probe(struct platform_device *dev)
 	int err = 0;
 	unsigned int n;
 
-	/*
-	 * This driver passes ioremap addresses to io port accessors.
-	 * This works on arm if the IO_SPACE_LIMIT does not truncate
-	 * the address.
-	 */
-	if (~(unsigned long)IO_SPACE_LIMIT)
-		return -ENODEV;
-
 	match = of_match_device(aspeed_smc_matches, &dev->dev);
 	if (!match || !match->data)
 		return -ENODEV;
@@ -523,7 +529,7 @@ static int aspeed_smc_probe(struct platform_device *dev)
 		controller->chips[n] = chip;
 	}
 
-	/* did we register any children? */
+	/* Were any children registered? */
 	for (n = 0; n < info->nce; n++)
 		if (controller->chips[n])
 			break;
