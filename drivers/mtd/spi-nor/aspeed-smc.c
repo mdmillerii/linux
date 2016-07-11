@@ -331,15 +331,6 @@ static void aspeed_smc_write_user(struct spi_nor *nor, loff_t to, size_t len,
 	aspeed_smc_stop_user(nor);
 }
 
-static int aspeed_smc_erase(struct spi_nor *nor, loff_t offs)
-{
-	aspeed_smc_start_user(nor);
-	aspeed_smc_send_cmd_addr(nor, nor->erase_opcode, offs);
-	aspeed_smc_stop_user(nor);
-
-	return 0;
-}
-
 static int aspeed_smc_remove(struct platform_device *dev)
 {
 	struct aspeed_smc_chip *chip;
@@ -505,7 +496,6 @@ static int aspeed_smc_probe(struct platform_device *dev)
 		chip->nor.priv = chip;
 		spi_nor_set_flash_node(&chip->nor, child);
 		chip->nor.mtd.name = of_get_property(child, "label", NULL);
-		chip->nor.erase = aspeed_smc_erase;
 		chip->nor.read = aspeed_smc_read_user;
 		chip->nor.write = aspeed_smc_write_user;
 		chip->nor.read_reg = aspeed_smc_read_reg;
