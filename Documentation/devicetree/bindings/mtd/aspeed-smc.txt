@@ -1,15 +1,16 @@
-* Aspeed Static Memory controller in SPI mode
+* Aspeed Static Memory controller (attached to SPI flash)
 * Aspeed SPI Flash Controller
 
 Required properties:
   - compatible : Should be one of
 	"aspeed,ast2400-fmc" for the AST2400 Static Memory Controller
-	"aspeed,ast2500-fmc" for the AST2500 Static Memory Controller
-	"aspeed,ast2400-smc" for the AST2400 SPI flash controller
+	"aspeed,ast2400-smc" for the AST2400 SPI Flash Controller
+	"aspeed,ast2500-fmc" for the AST2500 Firmware SPI Memory Controller
+	"aspeed,ast2500-smc" for the AST2500 SPI Flash Controller
   - reg : the first contains the register location and length,
           the second through nth contains the memory mapping address and length
 	  for the access window for each chips select
-  - interrupts : Should contain the interrupt for the dma device if fmc
+  - interrupts : Should contain the interrupt for the dma device if an fmc
   - clocks : The APB clock input to the controller
   - #address-cells : must be 1 corresponding to chip select child binding
   - #size-cells : must be 0 corresponding to chip select child binding
