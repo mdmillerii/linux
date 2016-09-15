@@ -31,9 +31,9 @@
  * memcpy_toio on little endian targets use the optimized memcpy routines
  * that were designed for well behavied memory storage.  These routines
  * have a stutter if the source and destination are not both word aligned,
- * once with a duplicate access to the source after aligning the destination
- * to a word boundary, and once with a duplicate access to the destination
- * when the final byte count is not word aligned.
+ * once with a duplicate access to the source after aligning to the
+ * destination to a word boundary, and again with a duplicate access to
+ * the source when the final byte count is not word aligned.
  *
  * When writing or reading the fifo this stutter discards data or sends
  * too much data to the fifo and can not be used by this driver.
@@ -140,35 +140,54 @@ struct aspeed_smc_info {
 	u8 maxwidth;		/* max width of spi bus */
 	bool hasdma;		/* has dma engine */
 	bool hastype;		/* flash type field exists in cfg reg */
-	u8 we0;			/* we shift for ce 0 in cfg reg */
+	u8 we0;			/* shift for write enable bit for ce 0 */
 	u8 ctl0;		/* offset in regs of ctl for ce 0 */
-	u8 cfg;			/* offset in regs of cfg */
 	u8 time;		/* offset in regs of timing */
 	u8 misc;		/* offset in regs of misc settings */
 };
 
-static struct aspeed_smc_info fmc_info = {
+static struct aspeed_smc_info fmc_2400_info = {
 	.nce = 5,
 	.maxwidth = 4,
 	.hasdma = true,
 	.hastype = true,
 	.we0 = 16,
 	.ctl0 = 0x10,
-	.cfg = 0x00,
-	.time = 0x54,
-	.misc = 0x50,
+	.time = 0x94,
+	.misc = 0x54,
 };
 
-static struct aspeed_smc_info smc_info = {
+static struct aspeed_smc_info smc_2400_info = {
 	.nce = 1,
 	.maxwidth = 2,
 	.hasdma = false,
 	.hastype = false,
 	.we0 = 0,
 	.ctl0 = 0x04,
-	.cfg = 0x00,
 	.time = 0x14,
 	.misc = 0x10,
+};
+
+static struct aspeed_smc_info fmc_2500_info = {
+	.nce = 3,
+	.maxwidth = 2,
+	.hasdma = true,
+	.hastype = true,
+	.we0 = 16,
+	.ctl0 = 0x10,
+	.time = 0x94,
+	.misc = 0x54,
+};
+
+static struct aspeed_smc_info smc_2500_info = {
+	.nce = 2,
+	.maxwidth = 2,
+	.hasdma = false,
+	.hastype = false,
+	.we0 = 16,
+	.ctl0 = 0x10,
+	.time = 0x94,
+	.misc = 0x54,
 };
 
 enum smc_ctl_reg_value {
@@ -180,7 +199,7 @@ enum smc_ctl_reg_value {
 
 struct aspeed_smc_controller;
 
-struct aspeed_smc_chip {
+struct aspeed_smc_per_chip {
 	struct aspeed_smc_controller *controller;
 	__le32 __iomem *ctl;			/* control register */
 	void __iomem *base;			/* base of chip window */
@@ -193,9 +212,10 @@ struct aspeed_smc_controller {
 	struct mutex mutex;			/* controller access mutex */
 	const struct aspeed_smc_info *info;	/* type info of controller */
 	void __iomem *regs;			/* controller registers */
-	struct aspeed_smc_chip *chips[0];	/* pointers to attached chips */
+	struct aspeed_smc_per_chip *chips[0];	/* pointers to attached chips */
 };
 
+#define TYPE_SETTING_REG 0
 #define CONTROL_SPI_AAF_MODE BIT(31)
 #define CONTROL_SPI_IO_MODE_MASK GENMASK(30, 28)
 #define CONTROL_SPI_IO_DUAL_DATA BIT(29)
@@ -209,8 +229,8 @@ struct aspeed_smc_controller {
 #define CONTROL_SPI_DUMMY_CYCLE_COMMAND_OUTPUT BIT(15)
 #define CONTROL_SPI_IO_DUMMY_CYCLES_HI BIT(14)
 #define CONTROL_SPI_IO_DUMMY_CYCLES_HI_SHIFT (14 - 2)
-#define CONTROL_SPI_IO_ADDRESS_4B BIT(13) /* FMC, LEGACY */
-#define CONTROL_SPI_CLK_DIV4 BIT(13) /* BIOS */
+#define CONTROL_SPI_IO_ADDRESS_4B BIT(13) /* 2400-smc */
+#define CONTROL_SPI_CLK_DIV4 BIT(13) /* FMC, 2500 */
 #define CONTROL_SPI_RW_MERGE BIT(12)
 #define CONTROL_SPI_IO_DUMMY_CYCLES_LO_SHIFT 6
 #define CONTROL_SPI_IO_DUMMY_CYCLES_LO GENMASK(7, CONTROL_SPI_IO_DUMMY_CYCLES_LO_SHIFT)
@@ -229,7 +249,7 @@ struct aspeed_smc_controller {
 #define CONTROL_SPI_COMMAND_MODE_USER (3)
 
 #define CONTROL_SPI_KEEP_MASK (CONTROL_SPI_AAF_MODE | \
-	CONTROL_SPI_CE_INACTIVE_MASK | CONTROL_SPI_IO_ADDRESS_4B | \
+	CONTROL_SPI_CE_INACTIVE_MASK | CONTROL_SPI_CLK_DIV4 | \
 	CONTROL_SPI_IO_DUMMY_CYCLES_MASK | CONTROL_SPI_CLOCK_FREQ_SEL_MASK | \
 	CONTROL_SPI_LSB_FIRST | CONTROL_SPI_CLOCK_MODE_3)
 
@@ -241,7 +261,7 @@ static u32 spi_control_fill_opcode(u8 opcode)
 
 static void aspeed_smc_start_user(struct spi_nor *nor)
 {
-	struct aspeed_smc_chip *chip = nor->priv;
+	struct aspeed_smc_per_chip *chip = nor->priv;
 	u32 ctl = chip->ctl_val[smc_base];
 
 	mutex_lock(&chip->controller->mutex);
@@ -256,7 +276,7 @@ static void aspeed_smc_start_user(struct spi_nor *nor)
 
 static void aspeed_smc_stop_user(struct spi_nor *nor)
 {
-	struct aspeed_smc_chip *chip = nor->priv;
+	struct aspeed_smc_per_chip *chip = nor->priv;
 
 	u32 ctl = chip->ctl_val[smc_read];
 	u32 ctl2 = ctl | CONTROL_SPI_COMMAND_MODE_USER |
@@ -270,7 +290,7 @@ static void aspeed_smc_stop_user(struct spi_nor *nor)
 
 static int aspeed_smc_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf, int len)
 {
-	struct aspeed_smc_chip *chip = nor->priv;
+	struct aspeed_smc_per_chip *chip = nor->priv;
 
 	aspeed_smc_start_user(nor);
 	aspeed_smc_to_fifo(chip->base, &opcode, 1);
@@ -283,7 +303,7 @@ static int aspeed_smc_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf, int len)
 static int aspeed_smc_write_reg(struct spi_nor *nor, u8 opcode, u8 *buf,
 				int len)
 {
-	struct aspeed_smc_chip *chip = nor->priv;
+	struct aspeed_smc_per_chip *chip = nor->priv;
 
 	aspeed_smc_start_user(nor);
 	aspeed_smc_to_fifo(chip->base, &opcode, 1);
@@ -295,7 +315,7 @@ static int aspeed_smc_write_reg(struct spi_nor *nor, u8 opcode, u8 *buf,
 
 static void aspeed_smc_send_cmd_addr(struct spi_nor *nor, u8 cmd, u32 addr)
 {
-	struct aspeed_smc_chip *chip = nor->priv;
+	struct aspeed_smc_per_chip *chip = nor->priv;
 	__be32 temp;
 	u32 cmdaddr;
 
@@ -323,7 +343,7 @@ static void aspeed_smc_send_cmd_addr(struct spi_nor *nor, u8 cmd, u32 addr)
 static ssize_t aspeed_smc_read_user(struct spi_nor *nor, loff_t from, size_t len,
 				u_char *read_buf)
 {
-	struct aspeed_smc_chip *chip = nor->priv;
+	struct aspeed_smc_per_chip *chip = nor->priv;
 
 	aspeed_smc_start_user(nor);
 	aspeed_smc_send_cmd_addr(nor, nor->read_opcode, from);
@@ -336,7 +356,7 @@ static ssize_t aspeed_smc_read_user(struct spi_nor *nor, loff_t from, size_t len
 static ssize_t aspeed_smc_write_user(struct spi_nor *nor, loff_t to, size_t len,
 				  const u_char *write_buf)
 {
-	struct aspeed_smc_chip *chip = nor->priv;
+	struct aspeed_smc_per_chip *chip = nor->priv;
 
 	aspeed_smc_start_user(nor);
 	aspeed_smc_send_cmd_addr(nor, nor->program_opcode, to);
@@ -348,7 +368,7 @@ static ssize_t aspeed_smc_write_user(struct spi_nor *nor, loff_t to, size_t len,
 
 static int aspeed_smc_remove(struct platform_device *dev)
 {
-	struct aspeed_smc_chip *chip;
+	struct aspeed_smc_per_chip *chip;
 	struct aspeed_smc_controller *controller = platform_get_drvdata(dev);
 	int n;
 
@@ -362,9 +382,10 @@ static int aspeed_smc_remove(struct platform_device *dev)
 }
 
 const struct of_device_id aspeed_smc_matches[] = {
-	{ .compatible = "aspeed,ast2500-fmc", .data = &fmc_info },
-	{ .compatible = "aspeed,ast2400-fmc", .data = &fmc_info },
-	{ .compatible = "aspeed,ast2400-smc", .data = &smc_info },
+	{ .compatible = "aspeed,ast2400-fmc", .data = &fmc_2400_info },
+	{ .compatible = "aspeed,ast2400-smc", .data = &smc_2400_info },
+	{ .compatible = "aspeed,ast2500-fmc", .data = &fmc_2500_info },
+	{ .compatible = "aspeed,ast2500-smc", .data = &smc_2500_info },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, aspeed_smc_matches);
@@ -419,7 +440,7 @@ static int aspeed_smc_probe(struct platform_device *dev)
 
 	for_each_available_child_of_node(dev->dev.of_node, child) {
 		struct platform_device *cdev;
-		struct aspeed_smc_chip *chip;
+		struct aspeed_smc_per_chip *chip;
 		u32 reg;
 
 		/* This version does not support nand or nor flash devices. */
@@ -456,36 +477,36 @@ static int aspeed_smc_probe(struct platform_device *dev)
 
 		r = platform_get_resource(dev, IORESOURCE_MEM, n + 1);
 		chip->base = devm_ioremap_resource(&dev->dev, r);
-
 		if (!chip->base)
 			continue;
+
 		chip->controller = controller;
 		chip->ctl = controller->regs + info->ctl0 + n * 4;
 
-		/*
-		 * The device tree said the chip is spi.
-		 * XXX Need to set it in controller if has_type says the
-		 * type is programmable.
-		 */
+		/* The device tree said the chip is spi. */
 		chip->type = smc_type_spi;
 
 		/*
-		 * Always turn on the write enable bit in the config register
-		 * to allow opcodes to be sent in user mode.
+		 * Always turn on the write enable bit in the type and settings
+		 * or flash configuration register to allow opcodes to be sent
+		 * in user mode.  Set the attached chip type for this chip
+		 * select if the bits exist.
 		 */
 		mutex_lock(&controller->mutex);
-		reg = readl(controller->regs + info->cfg);
-		dev_dbg(&dev->dev, "flash config was %08x\n", reg);
+		reg = readl(controller->regs + TYPE_SETTING_REG);
+		dev_dbg(&dev->dev, "flash type and setting was %08x\n", reg);
 		reg |= 1 << (info->we0 + n); /* WEn */
-		writel(reg, controller->regs + info->cfg);
+		if (info->hastype) {
+			reg &= ~(3 << (n * 2));
+			reg |= chip->type << (n * 2);
+		}
+		writel(reg, controller->regs + TYPE_SETTING_REG);
 		mutex_unlock(&controller->mutex);
 
 		/*
 		 * Read the existing control register to get basic values.
 		 *
 		 * XXX This register probably needs more sanitation.
-		 * XXX Do we trust the bootloader or the device tree?
-		 * spi-nor.c trusts jtag id over passed ids.
 		 *
 		 * Do we need support for mode 3 vs mode 0 clock phasing?
 		 */
@@ -531,7 +552,7 @@ static int aspeed_smc_probe(struct platform_device *dev)
 		 * Adjust clocks if fast read and write are supported.
 		 * Interpret spi-nor flags to adjust controller settings.
 		 * Check if resource size big enough for detected chip and
-		 * add support assisted (normal or fast-) read.
+		 * add support assisted (normal or fast-) read and dma.
 		 */
 
 		err = mtd_device_register(&chip->nor.mtd, NULL, 0);
