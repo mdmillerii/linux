@@ -411,7 +411,7 @@ config HW_RANDOM_MESON
 	  If unsure, say Y.
 
 config HW_RANDOM_ASPEED
-	tristate "Aspeed Random Number Generator support"
+	bool "Aspeed Random Number Generator support"
 	depends on HW_RANDOM
 	depends on ARCH_ASPEED || COMPILE_TEST
 	default y
