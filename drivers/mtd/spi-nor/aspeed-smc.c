@@ -23,9 +23,9 @@
 #include <linux/sysfs.h>
 
 /*
- * In user mode bytes all data bytes read or written to the chip decode
- * address range are sent to the SPI bus.  The range is treated as a fifo
- * of arbitratry 1, 2, or 4 byte width but each write has to be aligned
+ * In user mode all data bytes read or written to the chip decode address
+ * range are transfered to or from the SPI bus.  The range is treated as a
+ * fifo of arbitratry 1, 2, or 4 byte width but each write has to be aligned
  * to its size.  The address within the multiple 8kB range is ignored when
  * sending bytes to the SPI bus.
  *
