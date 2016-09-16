@@ -354,8 +354,8 @@ static void aspeed_smc_send_cmd_addr(struct spi_nor *nor, u8 cmd, u32 addr)
 	}
 }
 
-static ssize_t aspeed_smc_read_user(struct spi_nor *nor, loff_t from, size_t len,
-				u_char *read_buf)
+static ssize_t aspeed_smc_read_user(struct spi_nor *nor, loff_t from,
+				    size_t len, u_char *read_buf)
 {
 	struct aspeed_smc_per_chip *chip = nor->priv;
 
@@ -368,7 +368,7 @@ static ssize_t aspeed_smc_read_user(struct spi_nor *nor, loff_t from, size_t len
 }
 
 static ssize_t aspeed_smc_write_user(struct spi_nor *nor, loff_t to, size_t len,
-				  const u_char *write_buf)
+				     const u_char *write_buf)
 {
 	struct aspeed_smc_per_chip *chip = nor->priv;
 
