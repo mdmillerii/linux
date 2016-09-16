@@ -9,8 +9,10 @@
  */
 
 #include <linux/bug.h>
+#include <linux/count_zeros.h>
 #include <linux/device.h>
 #include <linux/io.h>
+#include <linux/log2.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/mtd/mtd.h>
@@ -21,7 +23,7 @@
 #include <linux/sysfs.h>
 
 /*
- * In user mode bytes all data bytes read or written to the chip decode 
+ * In user mode bytes all data bytes read or written to the chip decode
  * address range are sent to the SPI bus.  The range is treated as a fifo
  * of arbitratry 1, 2, or 4 byte width but each write has to be aligned
  * to its size.  The address within the multiple 8kB range is ignored when
@@ -136,6 +138,7 @@ enum smc_flash_type {
 };
 
 struct aspeed_smc_info {
+	u32 maxsize;		/* maximum size of 1 chip window */
 	u8 nce;			/* number of chip enables */
 	u8 maxwidth;		/* max width of spi bus */
 	bool hasdma;		/* has dma engine */
@@ -147,6 +150,7 @@ struct aspeed_smc_info {
 };
 
 static struct aspeed_smc_info fmc_2400_info = {
+	.maxsize = 64 * 1024 * 1024,
 	.nce = 5,
 	.maxwidth = 4,
 	.hasdma = true,
@@ -158,6 +162,7 @@ static struct aspeed_smc_info fmc_2400_info = {
 };
 
 static struct aspeed_smc_info smc_2400_info = {
+	.maxsize = 64 * 1024 * 1024,
 	.nce = 1,
 	.maxwidth = 2,
 	.hasdma = false,
@@ -169,6 +174,7 @@ static struct aspeed_smc_info smc_2400_info = {
 };
 
 static struct aspeed_smc_info fmc_2500_info = {
+	.maxsize = 256 * 1024 * 1024,
 	.nce = 3,
 	.maxwidth = 2,
 	.hasdma = true,
@@ -180,6 +186,7 @@ static struct aspeed_smc_info fmc_2500_info = {
 };
 
 static struct aspeed_smc_info smc_2500_info = {
+	.maxsize = 128 * 1024 * 1024,
 	.nce = 2,
 	.maxwidth = 2,
 	.hasdma = false,
@@ -212,10 +219,17 @@ struct aspeed_smc_controller {
 	struct mutex mutex;			/* controller access mutex */
 	const struct aspeed_smc_info *info;	/* type info of controller */
 	void __iomem *regs;			/* controller registers */
+	void __iomem *windows;			/* per-chip windows resource */
 	struct aspeed_smc_per_chip *chips[0];	/* pointers to attached chips */
 };
 
-#define TYPE_SETTING_REG 0
+#define LOG_8MB (23)	/* log(2)(8 * 1024 * 1024) */
+#define TYPE_SETTING_REG 0x00
+#define SEGMENT_ADDR_REG0 0x30
+#define         SEGMENT_ADDR_START(_r) ((((_r) >> 16) & 0xFF) << LOG_8MB)
+#define         SEGMENT_ADDR_END(_r) ((((_r) >> 24) & 0xFF) << LOG_8MB)
+#define         SEGMENT_ADDR_VAL(_s, _e) ((((_s) >> LOG_8MB) << 16) | \
+					  (((_e) >> LOG_8MB) << 24))
 #define CONTROL_SPI_AAF_MODE BIT(31)
 #define CONTROL_SPI_IO_MODE_MASK GENMASK(30, 28)
 #define CONTROL_SPI_IO_DUAL_DATA BIT(29)
@@ -402,13 +416,82 @@ of_platform_device_create_or_find(struct device_node *child,
 	return cdev;
 }
 
+
+/**
+ * fix_window_overlap
+ * @controller: the controller to check
+ * @window: the resource for the window being divided
+ *
+ * Adjust the Chip Select Address Decoding Range registers based on their
+ * existing size and alignment to not overlap.
+ *
+ * Return: true if all chip select windows fit, false if some were closed.
+ */
+static bool fix_window_overlap(struct aspeed_smc_controller *controller,
+				 struct resource *window)
+{
+	u32 reg;
+	bool all_fit = true;
+	u32 cur, start, end, size, align;
+	unsigned int n;
+
+	cur = window->start;
+
+	for (n=0; n < controller->info->nce; n++) {
+		reg = readl(controller->regs + SEGMENT_ADDR_REG0 + n * 4);
+		start = SEGMENT_ADDR_START(reg);
+		end = SEGMENT_ADDR_END(reg);
+
+		/* Determine window size and alignemnt */
+		size = roundup_pow_of_two(end - start);
+		align = count_trailing_zeros(end | start);
+
+		size = min(size, 1U << align);
+		/* and controller max size */
+		size = min(size, controller->info->maxsize);
+
+		start = ALIGN(cur, size);
+		end = start + size;
+
+		if (end > window->end + 1) {
+			all_fit = false;
+			end = window->end + 1;
+			start = min(start, end);
+		}
+
+		reg = SEGMENT_ADDR_VAL(start, end);
+		writel(reg, controller->regs + SEGMENT_ADDR_REG0 + n * 4);
+
+		cur = end;
+	}
+
+	return all_fit;
+}
+
+static void __iomem *window_start(struct aspeed_smc_controller *controller,
+			 struct resource *r, unsigned int n)
+{
+	u32 offset = 0;
+	u32 reg;
+
+	if (controller->info->nce > 1) {
+		reg = readl(controller->regs + SEGMENT_ADDR_REG0 + n * 4);
+
+		if (SEGMENT_ADDR_START(reg) >= SEGMENT_ADDR_END(reg))
+			return NULL;
+
+		offset = SEGMENT_ADDR_START(reg) - r->start;
+	}
+
+	return controller->windows + offset;
+}
+
 static int aspeed_smc_probe(struct platform_device *dev)
 {
 	struct aspeed_smc_controller *controller;
 	const struct of_device_id *match;
 	const struct aspeed_smc_info *info;
 	struct resource *r;
-	void __iomem *regs;
 	struct device_node *child;
 	int err = 0;
 	unsigned int n;
@@ -417,19 +500,27 @@ static int aspeed_smc_probe(struct platform_device *dev)
 	if (!match || !match->data)
 		return -ENODEV;
 	info = match->data;
-	r = platform_get_resource(dev, IORESOURCE_MEM, 0);
-	regs = devm_ioremap_resource(&dev->dev, r);
-	if (IS_ERR(regs))
-		return PTR_ERR(regs);
 
 	controller = devm_kzalloc(&dev->dev, sizeof(*controller) +
 		info->nce * sizeof(controller->chips[0]), GFP_KERNEL);
 	if (!controller)
 		return -ENOMEM;
-	platform_set_drvdata(dev, controller);
-	controller->regs = regs;
 	controller->info = info;
 	mutex_init(&controller->mutex);
+	platform_set_drvdata(dev, controller);
+
+	r = platform_get_resource(dev, IORESOURCE_MEM, 0);
+	controller->regs = devm_ioremap_resource(&dev->dev, r);
+	if (IS_ERR(controller->regs))
+		return PTR_ERR(controller->regs);
+
+	r = platform_get_resource(dev, IORESOURCE_MEM, 1);
+	controller->windows = devm_ioremap_resource(&dev->dev, r);
+	if (IS_ERR(controller->windows))
+		return PTR_ERR(controller->windows);
+
+	if (info->nce > 1)
+		fix_window_overlap(controller, r);
 
 	/* The pinmux or bootloader will disable legacy mode. */
 
@@ -475,16 +566,17 @@ static int aspeed_smc_probe(struct platform_device *dev)
 		if (!chip)
 			continue;
 
-		r = platform_get_resource(dev, IORESOURCE_MEM, n + 1);
-		chip->base = devm_ioremap_resource(&dev->dev, r);
-		if (!chip->base)
-			continue;
-
 		chip->controller = controller;
 		chip->ctl = controller->regs + info->ctl0 + n * 4;
 
 		/* The device tree said the chip is spi. */
 		chip->type = smc_type_spi;
+
+		chip->base = window_start(controller, r, n);
+		if (!chip->base) {
+			dev_warn(&cdev->dev, "CE segment window closed.\n");
+			continue;
+		}
 
 		/*
 		 * Always turn on the write enable bit in the type and settings
