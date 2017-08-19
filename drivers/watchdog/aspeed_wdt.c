@@ -16,11 +16,13 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/watchdog.h>
+#include <linux/bitfield.h>
 
 struct aspeed_wdt {
 	struct watchdog_device	wdd;
 	void __iomem		*base;
 	u32			ctrl;
+	u32			boot_timeout_status;
 };
 
 static const struct of_device_id aspeed_wdt_of_table[] = {
@@ -42,6 +44,13 @@ MODULE_DEVICE_TABLE(of, aspeed_wdt_of_table);
 #define   WDT_CTRL_WDT_INTR		BIT(2)
 #define   WDT_CTRL_RESET_SYSTEM		BIT(1)
 #define   WDT_CTRL_ENABLE		BIT(0)
+#define WDT_TIMEOUT_STATUS		0x10
+#define   WDT_TIMEOUT_EVENT_COUNTER	GENMASK(15, 8)
+#define   WDT_TIMEOUT_BOOT_SECONDARY	BIT(1)
+#define   WDT_TIMEOUT_OCCURRED		BIT(0)
+#define WDT_CLEAR_TIMEOUT_STATUS	0x14
+#define   WDT_CLEAR_TIMEOUT_COUNT	(0x3B << 1)
+#define   WDT_CLEAR_OCCURRED_BOOT	BIT(0)		1
 #define WDT_RESET_WIDTH		0x18
 #define   WDT_RESET_WIDTH_ACTIVE_HIGH	BIT(31)
 #define     WDT_ACTIVE_HIGH_MAGIC	(0xA5 << 24)
@@ -129,10 +138,28 @@ static int aspeed_wdt_restart(struct watchdog_device *wdd,
 	return 0;
 }
 
+static unsigned int aspeed_wdt_status(struct watchdog_device *wdd)
+{
+	struct aspeed_wdt *wdt = to_aspeed_wdt(wdd);
+	u32 timeout_status;
+	int status = 0;
+
+	timeout_status = readl(wdt->base + WDT_TIMEOUT_STATUS);
+
+	if (FIELD_GET(WDT_TIMEOUT_OCCURRED, timeout_status))
+		status |= WDIOF_CARDRESET;
+
+	if (FIELD_GET(WDT_CTRL_RESET_SYSTEM, wdt->ctrl) == 0)
+		status |= WDIOF_ALARMONLY;
+
+	return status;
+}
+
 static const struct watchdog_ops aspeed_wdt_ops = {
 	.start		= aspeed_wdt_start,
 	.stop		= aspeed_wdt_stop,
 	.ping		= aspeed_wdt_ping,
+	.status		= aspeed_wdt_status,
 	.set_timeout	= aspeed_wdt_set_timeout,
 	.restart	= aspeed_wdt_restart,
 	.owner		= THIS_MODULE,
@@ -184,6 +211,11 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
 
 	wdt->wdd.timeout = WDT_DEFAULT_TIMEOUT;
 	watchdog_init_timeout(&wdt->wdd, 0, &pdev->dev);
+
+	wdt->boot_timeout_status = readl(wdt->base + WDT_TIMEOUT_STATUS);
+
+	if (FIELD_GET(WDT_TIMEOUT_OCCURRED, wdt->boot_timeout_status))
+		wdt->wdd.bootstatus |= WDIOF_CARDRESET;
 
 	wdt->ctrl = WDT_CTRL_1MHZ_CLK;
 
