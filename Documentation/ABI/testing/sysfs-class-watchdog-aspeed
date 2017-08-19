@@ -1,0 +1,18 @@
+What:		/sys/class/watchdog/watchdogn/activations
+Date:		August 2017
+Contact:   	Milton Miller <miltonm@us.ibm.com>
+Description:
+		It is a read-write file. It contains a count of times
+		the watchdog device had been activated since the couter
+		was reset.  Writing 0 to the device will reset the counter.
+		Support for this counter and its range is hardware specific.
+
+What:		/sys/class/watchdog/watchdogn/boot_activations
+Date:		August 2017
+Contact:   	Milton Miller <miltonm@us.ibm.com>
+Description:
+		It is a read only file. It contains a count of times
+		the watchdog device had been activated at boot since the
+		couter was reset.  Support for this counter and its range
+		is hardware specific.
+

@@ -172,6 +172,68 @@ static const struct watchdog_info aspeed_wdt_info = {
 	.identity	= KBUILD_MODNAME,
 };
 
+#ifdef CONFIG_WATCHDOG_SYSFS
+static ssize_t bootactivations_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct watchdog_device *wdd = dev_get_drvdata(dev);
+	struct aspeed_wdt *wdt = to_aspeed_wdt(wdd);
+	u32 cnt;
+
+	cnt = FIELD_GET(WDT_TIMEOUT_EVENT_COUNTER, wdt->boot_timeout_status);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", cnt);
+}
+
+static ssize_t activations_show(struct device *dev,
+			        struct device_attribute *attr, char *buf)
+{
+	struct watchdog_device *wdd = dev_get_drvdata(dev);
+	struct aspeed_wdt *wdt = to_aspeed_wdt(wdd);
+	u32 timeout_status, cnt;
+
+	timeout_status = readl(wdt->base + WDT_TIMEOUT_STATUS);
+	cnt = FIELD_GET(WDT_TIMEOUT_EVENT_COUNTER, timeout_status);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", cnt);
+}
+
+static ssize_t activations_store(struct device *dev,
+			         struct device_attribute *attr, const char *buf,
+			         size_t count)
+{
+	struct watchdog_device *wdd = dev_get_drvdata(dev);
+	struct aspeed_wdt *wdt = to_aspeed_wdt(wdd);
+	int ret;
+	u8 check;
+
+	ret = kstrtou8(buf, 0, &check);
+	if (ret)
+		return ret;
+
+	/* Can only be cleared to 0. */
+	if (check)
+		return -ERANGE;
+
+	writel(WDT_CLEAR_TIMEOUT_COUNT, wdt->base + WDT_CLEAR_TIMEOUT_STATUS);
+
+	return count;
+}
+
+DEVICE_ATTR_RW(activations);
+DEVICE_ATTR_RO(bootactivations);
+
+struct attribute *aspeed_wdt_attrs[] = {
+	&dev_attr_activations.attr,
+	&dev_attr_bootactivations.attr,
+	NULL
+};
+
+ATTRIBUTE_GROUPS(aspeed_wdt);
+#else
+#define aspeed_wdt_groups NULL
+#endif
+
 static int aspeed_wdt_remove(struct platform_device *pdev)
 {
 	struct aspeed_wdt *wdt = platform_get_drvdata(pdev);
@@ -208,6 +270,7 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
 	wdt->wdd.ops = &aspeed_wdt_ops;
 	wdt->wdd.max_hw_heartbeat_ms = WDT_MAX_TIMEOUT_MS;
 	wdt->wdd.parent = &pdev->dev;
+	wdt->wdd.groups = aspeed_wdt_groups;
 
 	wdt->wdd.timeout = WDT_DEFAULT_TIMEOUT;
 	watchdog_init_timeout(&wdt->wdd, 0, &pdev->dev);
