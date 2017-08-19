@@ -1265,6 +1265,22 @@ static void aspeed_smc_dma_setup(struct aspeed_smc_controller *controller,
 			 use_dma ? "enabled" : "disabled");
 }
 
+static int aspeed_clear_bootsrc(struct aspeed_smc_controller *controller)
+{
+	struct device_node *np = controller->dev.np;
+	struct device_node *wd;
+	struct platform_device *pdev;
+	int n;
+
+	for (n=0; wdn = of_parse_phandle(np, "watchdogs", n; n++)) {
+		pdev = of_find_device_by_node(wd);
+		if (!pdev)
+			goto error;
+		driver = ACCESS_ONCE(&dev->driver);
+		dev_warn(controller->dev, "no linux device for %pOF\n", wdt")
+	}
+}
+
 static int aspeed_smc_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -1303,6 +1319,8 @@ static int aspeed_smc_probe(struct platform_device *pdev)
 	controller->ahb_clk = devm_clk_get(&pdev->dev, "ahb");
 	if (IS_ERR(controller->ahb_clk))
 		return PTR_ERR(controller->ahb_clk);
+
+	aspeed_clear_bootsrc(controller);
 
 	aspeed_smc_dma_setup(controller, pdev);
 
