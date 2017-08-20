@@ -194,7 +194,7 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
 	np = pdev->dev.of_node;
 	ret = of_property_read_string(np, "aspeed,reset-type", &reset_type);
 	if (ret) {
-		wdt->ctrl |= WDT_CTRL_RESET_SYSTEM;
+		wdt->ctrl |= WDT_CTRL_RESET_MODE_SOC | WDT_CTRL_RESET_SYSTEM;
 	} else {
 		if (!strcmp(reset_type, "cpu"))
 			wdt->ctrl |= WDT_CTRL_RESET_MODE_ARM_CPU;
@@ -202,6 +202,8 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
 			wdt->ctrl |= WDT_CTRL_RESET_MODE_SOC;
 		else if (!strcmp(reset_type, "system"))
 			wdt->ctrl |= WDT_CTRL_RESET_SYSTEM;
+		else if (strcmp(reset_type, "none"))
+			return -EINVAL;
 	}
 	if (of_property_read_bool(np, "aspeed,external-signal"))
 		wdt->ctrl |= WDT_CTRL_WDT_EXT;
