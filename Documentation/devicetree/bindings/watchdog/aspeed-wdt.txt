@@ -33,6 +33,9 @@ Optional properties:
         - none: No reset is performed on timeout. Assumes another watchdog
                 engine is responsible for this.
 
+ - aspeed,secondary-boot: If property is present and watchdog activates,
+			  swtich to alternate boot source
+
  - aspeed,interrupt:	If property is present then interrupt CPU.
 			If not specified then don't interrupt CPU.
 
