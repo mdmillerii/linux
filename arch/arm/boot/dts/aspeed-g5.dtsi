@@ -300,8 +300,8 @@
 			};
 
 			wdt3: wdt@1e785040 {
-				compatible = "aspeed,wdt";
-				reg = <0x1e785074 0x1c>;
+				compatible = "aspeed,ast2500-wdt";
+				reg = <0x1e785040 0x1c>;
 				status = "disabled";
 			};
 
