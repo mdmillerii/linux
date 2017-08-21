@@ -428,7 +428,7 @@ static ssize_t bootstatus_show(struct device *dev,
 {
 	struct watchdog_device *wdd = dev_get_drvdata(dev);
 
-	return sprintf(buf, "%u\n", wdd->bootstatus);
+	return sprintf(buf, "0x%x\n", wdd->bootstatus);
 }
 static DEVICE_ATTR_RO(bootstatus);
 
