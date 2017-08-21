@@ -652,8 +652,22 @@
 
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_wdtrst1_default>;
+
+	status = "okay";
 };
 
 &wdt2 {
 	status = "okay";
+	aspeed,reset-type = "soc";
 };
+
+&wdt3 {
+	status = "okay";
+	aspeed,reset-type = "system";
+};
+
+/ { aliases {
+	watchdog0 = &wdt3;
+	watchdog1 = &wdt1;
+	watchdog2 = &wdt2;
+}; };
